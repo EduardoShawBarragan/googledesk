@@ -14,21 +14,6 @@ const GEMINI_GREEN  = "#2ba24c";
 /* ══════════════════════════════════════════
    ICONS
 ══════════════════════════════════════════ */
-const GoogleLensIcon = ({ size = 48 }) => (
-  <svg width={size} height={size} viewBox="0 0 56 56" fill="none">
-    <path d="M10 10 L10 22" stroke={GEMINI_RED}    strokeWidth="5" strokeLinecap="round"/>
-    <path d="M10 10 L22 10" stroke={GEMINI_RED}    strokeWidth="5" strokeLinecap="round"/>
-    <path d="M46 10 L46 22" stroke={GEMINI_BLUE}   strokeWidth="5" strokeLinecap="round"/>
-    <path d="M46 10 L34 10" stroke={GEMINI_BLUE}   strokeWidth="5" strokeLinecap="round"/>
-    <path d="M10 46 L10 34" stroke={GEMINI_GREEN}  strokeWidth="5" strokeLinecap="round"/>
-    <path d="M10 46 L22 46" stroke={GEMINI_GREEN}  strokeWidth="5" strokeLinecap="round"/>
-    <path d="M46 46 L46 34" stroke={GEMINI_YELLOW} strokeWidth="5" strokeLinecap="round"/>
-    <path d="M46 46 L34 46" stroke={GEMINI_YELLOW} strokeWidth="5" strokeLinecap="round"/>
-    <circle cx="28" cy="28" r="7" fill="none" stroke="white" strokeWidth="3"/>
-    <circle cx="28" cy="28" r="3" fill="white"/>
-  </svg>
-);
-
 const GeminiIcon = ({ size = 28 }) => (
   <img
     src={Frame}
@@ -757,3 +742,6 @@ export default function ARTutorApp() {
     </div>
   );
 }
+
+console.log(CameraPermissionScreen );
+console.log(storedImages);
