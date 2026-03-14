@@ -474,6 +474,8 @@ export default function ARTutorApp() {
   const [analyzing, setAnalyzing]   = useState(false);
   const [error, setError]           = useState("");
   const [storedImages, setStoredImages] = useState([]);
+  console.log(storedImages );
+
 
   // Webcam replaces videoRef + camState
   const webcamRef = useRef(null);
@@ -744,4 +746,3 @@ export default function ARTutorApp() {
 }
 
 console.log(CameraPermissionScreen );
-console.log(storedImages);
