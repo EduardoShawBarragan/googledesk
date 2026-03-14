@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import Frame from "./Frame.svg";
 
 // ── GEMINI API KEY HERE ──
 const GEMINI_API_KEY = "";
 
-const GEMINI_BLUE   = "#4285F4";
-const GEMINI_RED    = "#EA4335";
-const GEMINI_YELLOW = "#FBBC05";
-const GEMINI_GREEN  = "#34A853";
+const GEMINI_BLUE   = "#3b7ded";
+const GEMINI_RED    = "#e43e2b";
+const GEMINI_YELLOW = "#f0b501";
+const GEMINI_GREEN  = "#2ba24c";
 
 /* ══════════════════════════════════════════
    ICONS
@@ -27,19 +28,17 @@ const GoogleLensIcon = ({ size = 48 }) => (
 );
 
 const GeminiIcon = ({ size = 28 }) => (
-  <svg width={size} height={size} viewBox="0 0 40 40" fill="none">
-    <rect width="40" height="40" rx="10" fill="#1a1a2e"/>
-    <circle cx="20" cy="20" r="8" fill="none" stroke={GEMINI_BLUE} strokeWidth="2.5"/>
-    <circle cx="20" cy="20" r="3" fill={GEMINI_BLUE}/>
-    <line x1="20" y1="8"  x2="20" y2="4"  stroke={GEMINI_RED}    strokeWidth="2.5" strokeLinecap="round"/>
-    <line x1="20" y1="32" x2="20" y2="36" stroke={GEMINI_GREEN}  strokeWidth="2.5" strokeLinecap="round"/>
-    <line x1="8"  y1="20" x2="4"  y2="20" stroke={GEMINI_YELLOW} strokeWidth="2.5" strokeLinecap="round"/>
-    <line x1="32" y1="20" x2="36" y2="20" stroke={GEMINI_RED}    strokeWidth="2.5" strokeLinecap="round"/>
-  </svg>
+  <img
+    src={Frame}
+    alt="Gemini"
+    width={size}
+    height={size}
+    style={{ display: "block" }}
+  />
 );
 
 /* ══════════════════════════════════════════
-   GEMINI VISION API
+   GEMINI VISION <API>
    Captures video frame + canvas drawing,
    sends both as base64 image to Gemini
 ══════════════════════════════════════════ */
@@ -442,7 +441,7 @@ const ChatModal = ({ onClose, initialContext }) => {
 ══════════════════════════════════════════ */
 const CameraPermissionScreen = ({ onRequest, onDeny }) => (
   <div style={{ position:"absolute", inset:0, background:"#050510", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:32, gap:24, zIndex:50 }}>
-    <GoogleLensIcon size={72}/>
+    <GeminiIcon size={72}/>
     <div style={{ textAlign:"center" }}>
       <div style={{ color:"#fff", fontFamily:"'DM Sans',sans-serif", fontWeight:700, fontSize:22, marginBottom:10 }}>Camera Access Needed</div>
       <div style={{ color:"rgba(255,255,255,0.5)", fontFamily:"'DM Sans',sans-serif", fontSize:14, lineHeight:1.7 }}>Google Desk uses your camera to scan and mark your work in real time. Your camera feed is never stored or sent anywhere without your action.</div>
@@ -561,8 +560,6 @@ export default function ARTutorApp() {
     runAnalysis(text);
   };
 
-  const handleBack = () => { window.location.href = "https://www.google.com"; };
-
   const modeColors = {
     "Mark Work": GEMINI_BLUE,
     "Explain":   GEMINI_YELLOW,
@@ -628,12 +625,7 @@ export default function ARTutorApp() {
 
       {/* ── TOP BAR ── */}
       {camState !== "prompt" && phase !== "history" && phase !== "feedback" && (
-        <div style={{ position:"absolute", top:0, left:0, right:0, zIndex:10, padding:"50px 20px 14px", display:"flex", alignItems:"center", justifyContent:"space-between", background:"linear-gradient(180deg,rgba(0,0,0,0.65) 0%,transparent 100%)" }}>
-          <button onClick={handleBack} style={{ width:36, height:36, borderRadius:"50%", background:"rgba(0,0,0,0.35)", border:"1px solid rgba(255,255,255,0.15)", color:"#fff", fontSize:20, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>‹</button>
-          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-            <GeminiIcon size={24}/>
-            <span style={{ color:"#fff", fontFamily:"'DM Sans',sans-serif", fontWeight:700, fontSize:17, textShadow:"0 1px 10px rgba(0,0,0,0.6)" }}>Google Desk</span>
-          </div>
+        <div style={{ position:"absolute", top:0, left:0, right:0, zIndex:10, padding:"50px 20px 14px", display:"flex", alignItems:"center", justifyContent:"space-between", background:"linear-gradient(180deg,rgba(0,0,0,0.65) 0%,transparent 100%)" }}>          
           <div style={{ display:"flex", gap:8 }}>
             {/* History (clock) */}
             <button onClick={() => setPhase("history")} title="Work History" style={{ width:36, height:36, borderRadius:"50%", background:"rgba(0,0,0,0.35)", border:"1px solid rgba(255,255,255,0.15)", color:"rgba(255,255,255,0.7)", fontSize:15, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>🕐</button>
@@ -661,7 +653,7 @@ export default function ARTutorApp() {
 
       {/* ── IDLE BOTTOM PANEL ── */}
       {camState !== "prompt" && phase === "idle" && (
-        <div style={{ position:"absolute", bottom:0, left:0, right:0, zIndex:10, background:"linear-gradient(180deg,transparent 0%,rgba(0,0,0,0.92) 28%)", padding:"40px 24px 52px", display:"flex", flexDirection:"column", alignItems:"center", gap:16, animation:"fadeIn 0.5s ease" }}>
+        <div style={{ position:"absolute", bottom:0, left:0, right:0, zIndex:10, background:"linear-gradient(180deg, transparent 30%, rgba(0,0,0,1) 90%)", padding:"20px 24px 52px", display:"flex", flexDirection:"column", alignItems:"center", gap:16, animation:"fadeIn 3s ease" }}>
           <div style={{ textAlign:"center" }}>
             <div style={{ color:"#fff", fontFamily:"'DM Sans',sans-serif", fontWeight:700, fontSize:22, marginBottom:4 }}>Mark My Work</div>
             <div style={{ color:"rgba(255,255,255,0.45)", fontFamily:"'DM Sans',sans-serif", fontSize:13, lineHeight:1.6 }}>Point camera at your work and tap to scan<br/>or draw/type on screen to annotate</div>
@@ -669,7 +661,7 @@ export default function ARTutorApp() {
 
           {/* Scan Button */}
           <button onClick={() => { setTypedText(""); runAnalysis(); }} disabled={analyzing} style={{ background:"rgba(255,255,255,0.1)", border:"1.5px solid rgba(255,255,255,0.2)", borderRadius:22, width:84, height:84, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", boxShadow:"0 0 0 12px rgba(255,255,255,0.04),0 8px 32px rgba(0,0,0,0.5)", backdropFilter:"blur(8px)", animation:"lensIdle 2.5s ease-in-out infinite", opacity: analyzing?0.5:1 }}>
-            <GoogleLensIcon size={52}/>
+            <GeminiIcon size={52}/>
           </button>
 
           {/* Mode pills — each changes Gemini prompt */}
