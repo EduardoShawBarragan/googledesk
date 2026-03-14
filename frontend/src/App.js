@@ -1,6 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import Frame from "./Frame.svg";
 import Webcam from "react-webcam"; // add at top
+import { Scanner } from "./PaperScanner";
+import ReactDOM from 'react-dom/client'
+import React from 'react'
+
 
 
 // ── GEMINI API KEY HERE ──
@@ -477,6 +481,7 @@ export default function ARTutorApp() {
   console.log(storedImages );
 
 
+
   // Webcam replaces videoRef + camState
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
@@ -484,12 +489,26 @@ export default function ARTutorApp() {
 
   // Track if user granted webcam permission
   
-  const [webcamPermission, setWebcamPermission] = useState(false);
+  const [webcamPermission, setWebcamPermission] = useState(true);
 
   // Capture a snapshot from the webcam
   const captureSnapshot = useCallback(() => {
     if (!webcamRef.current) return null;
     return webcamRef.current.getScreenshot(); // base64 JPEG
+  }, []);
+
+  const [scannerReady, setScannerReady] = useState(false);
+  const scanner = useRef(null);
+
+  useEffect(() => {
+    const checkLibs = setInterval(() => {
+      if (window.cv && window.jscanify) {
+        scanner.current = new window.jscanify();
+        setScannerReady(true);
+        clearInterval(checkLibs);
+      }
+    }, 500);
+    return () => clearInterval(checkLibs);
   }, []);
 
   // Auto-capture snapshots every 10 seconds for internal use
@@ -585,7 +604,7 @@ export default function ARTutorApp() {
   };
 
   return (
-    <div style={{ position:"relative", width:"100%", maxWidth:430, height:"100dvh", margin:"0 auto", background:"#000", overflow:"hidden", userSelect:"none" }}>
+    <div style={{ position:"relative", width:"100%", height:"100%", margin:"0 auto", background:"#000", overflow:"hidden", userSelect:"none" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
         @keyframes edgeH    { 0%{transform:scaleX(0);opacity:0} 15%{opacity:1} 85%{opacity:1} 100%{transform:scaleX(1);opacity:0} }
@@ -600,6 +619,8 @@ export default function ARTutorApp() {
         ::-webkit-scrollbar { width:0; }
         input::placeholder,textarea::placeholder { color:rgba(255,255,255,0.35); }
       `}</style>
+
+      {webcamPermission && <Scanner />}
 
       {!webcamPermission && (
         <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", background:"#000" }}>
