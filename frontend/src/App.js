@@ -1,7 +1,10 @@
+/* global cv */
 import { useState, useRef, useEffect, useCallback } from "react";
 import Frame from "./Frame.svg";
-import Webcam from "react-webcam"; // add at top
+import Webcam from "react-webcam";
+import JScanify from "jscanify";
 
+const scanner = new JScanify();
 
 // ── GEMINI API KEY HERE ──
 const GEMINI_API_KEY = "112346534";
@@ -476,33 +479,229 @@ export default function ARTutorApp() {
   const [storedImages, setStoredImages] = useState([]);
   console.log(storedImages );
 
+  const scanPage = () => {
+
+    const video = webcamRef.current?.video;
+    const canvas = processingCanvasRef.current;
+
+    if (!video || !canvas) {
+      console.log("Video or canvas missing");
+      return;
+    }
+
+    const ctx = canvas.getContext("2d");
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    console.log("Frame captured");
+
+    const result = scanner.findPaperContour(canvas);
+
+    if (!result) {
+      console.log("No paper detected");
+      return;
+    }
+
+    console.log("Paper corners:", result);
+
+    const extracted = scanner.extractPaper(canvas, result);
+
+    console.log("Extracted image canvas:", extracted);
+
+    // optional: display result somewhere
+    document.body.appendChild(extracted);
+  };
 
   // Webcam replaces videoRef + camState
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
-  
 
-  // Track if user granted webcam permission
+  const processingCanvasRef = useRef(null);
+  const arCanvasRef = useRef(null);
+  const [paperCorners, setPaperCorners] = useState(null);
   
-  const [webcamPermission, setWebcamPermission] = useState(false);
-
   // Capture a snapshot from the webcam
   const captureSnapshot = useCallback(() => {
     if (!webcamRef.current) return null;
     return webcamRef.current.getScreenshot(); // base64 JPEG
   }, []);
 
-  // Auto-capture snapshots every 10 seconds for internal use
+  // ── Webcam Permission State ──
+  const [webcamPermission, setWebcamPermission] = useState(null); // null = unknown, true/false = granted/denied
+
+  // ── Safe JScanify Effect ──
   useEffect(() => {
     if (!webcamPermission) return;
 
-    const interval = setInterval(() => {
-      const snap = captureSnapshot();
-      if (snap) setStoredImages(prev => [...prev, snap]);
-    }, 10000); // every 10 seconds
+    let animationFrame;
 
-    return () => clearInterval(interval);
-  }, [webcamPermission, captureSnapshot]);
+    const detectPaper = () => {
+    const video = webcamRef.current?.video;
+    const canvas = processingCanvasRef.current;
+    console.log("detectPaper called", { videoReady: video?.readyState });
+
+    if (!video || !canvas || video.readyState !== 4) {
+        console.log("Waiting for video/canvas…", { video, canvas, readyState: video?.readyState });
+      animationFrame = requestAnimationFrame(detectPaper);
+      return;
+    }
+
+    const ctx = canvas.getContext("2d");
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const src = cv.imread(canvas);
+    const gray = new cv.Mat();
+    const blur = new cv.Mat();
+    const edges = new cv.Mat();
+
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+    cv.Canny(blur, edges, 75, 200);
+
+    const contours = new cv.MatVector();
+    const hierarchy = new cv.Mat();
+
+    cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
+    let biggest = null;
+    let maxArea = 0;
+
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt = contours.get(i);
+      const peri = cv.arcLength(cnt, true);
+      const approx = new cv.Mat();
+      cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+
+      if (approx.rows === 4) {
+        const area = cv.contourArea(approx);
+        if (area > maxArea) {
+          maxArea = area;
+          biggest = approx;
+        }
+      }
+    }
+
+    if (biggest) {
+      const pts = [];
+      for (let i = 0; i < 4; i++) {
+        const p = biggest.intPtr(i);
+        pts.push({ x: p[0], y: p[1] });
+      }
+
+      console.log("Paper detected!", pts);
+
+      setPaperCorners(pts); // optional for overlay
+
+      const arCanvas = arCanvasRef.current;
+      if (arCanvas) {
+        const ctx = arCanvas.getContext("2d");
+        arCanvas.width = video.videoWidth;
+        arCanvas.height = video.videoHeight;
+        ctx.clearRect(0, 0, arCanvas.width, arCanvas.height);
+
+        ctx.strokeStyle = "#00FF88";
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        ctx.lineTo(pts[1].x, pts[1].y);
+        ctx.lineTo(pts[2].x, pts[2].y);
+        ctx.lineTo(pts[3].x, pts[3].y);
+        ctx.closePath();
+        ctx.stroke();
+
+        pts.forEach(p => {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+          ctx.fillStyle = "#00FF88";
+          ctx.fill();
+        });
+      }
+    } else {
+      console.log("❌ No paper detected in this frame.");
+    }
+
+    console.log("Detection cycle finished");
+
+    src.delete();
+    gray.delete();
+    blur.delete();
+    edges.delete();
+    contours.delete();
+    hierarchy.delete();
+
+    animationFrame = requestAnimationFrame(detectPaper);
+  };
+
+    const video = webcamRef.current?.video;
+
+    const startDetection = () => {
+      if (video && video.readyState === 4) {
+        console.log("Video is ready! Starting paper detection.");
+        detectPaper();
+      } else {
+        requestAnimationFrame(startDetection);
+      }
+    };
+
+    startDetection();
+
+    return () => cancelAnimationFrame(animationFrame);
+  }, [webcamPermission]);
+
+  useEffect(() => {
+    const canvas = arCanvasRef.current;
+    const video = webcamRef.current?.video;
+
+    if (!canvas || !video) return;
+
+    const ctx = canvas.getContext("2d");
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (!paperCorners) return;
+
+    ctx.strokeStyle = "#00FF88";
+    ctx.lineWidth = 4;
+
+    ctx.beginPath();
+
+    ctx.moveTo(paperCorners[0].x, paperCorners[0].y);
+    ctx.lineTo(paperCorners[1].x, paperCorners[1].y);
+    ctx.lineTo(paperCorners[2].x, paperCorners[2].y);
+    ctx.lineTo(paperCorners[3].x, paperCorners[3].y);
+
+    ctx.closePath();
+    ctx.stroke();
+    
+    paperCorners.forEach(p => {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = "#00FF88";
+    ctx.fill();
+  });
+  }, [paperCorners]);
+  
+  useEffect(() => {
+  const waitForCV = () => {
+    if (window.cv) {
+      console.log("OpenCV is ready!");
+      // initialize your processing here
+    } else {
+      setTimeout(waitForCV, 100);
+    }
+  };
+  waitForCV();
+}, []);
 
   /* Clear drawing canvas */
   const clearCanvas = () => {
@@ -624,6 +823,7 @@ export default function ARTutorApp() {
         <Webcam
           audio={false}
           ref={webcamRef}
+          mirrored={false}
           screenshotFormat="image/jpeg"
           videoConstraints={{ facingMode: "environment" }}
           style={{
@@ -633,10 +833,12 @@ export default function ARTutorApp() {
             width: "100%",
             height: "100%",
             objectFit: "cover",
-            zIndex: 0 // behind all AR overlays and buttons
+            zIndex: 0
           }}
         />
       )}
+
+      <canvas ref={processingCanvasRef} style={{display:"none"}} />
 
       {/* ── AR DRAWING CANVAS ── */}
       {webcamPermission === true && (
@@ -677,11 +879,42 @@ export default function ARTutorApp() {
       {/* ── AR TOOLBAR (draw / type / clear) ── */}
       {webcamPermission === true && phase === "idle" && (
         <div style={{ position:"absolute", top:"12%", right:14, zIndex:12, display:"flex", flexDirection:"column", gap:8 }}>
-          <button onClick={() => setArMode(arMode==="draw" ? null : "draw")} title="Draw on screen" style={{ width:40, height:40, borderRadius:12, background: arMode==="draw"?`rgba(66,133,244,0.4)`:"rgba(0,0,0,0.5)", border:`1px solid ${arMode==="draw"?"rgba(66,133,244,0.8)":"rgba(255,255,255,0.15)"}`, color:"#fff", fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(8px)" }}>✏️</button>
-          <button onClick={() => setArMode(arMode==="type" ? null : "type")} title="Type on screen" style={{ width:40, height:40, borderRadius:12, background: arMode==="type"?`rgba(251,188,5,0.3)`:"rgba(0,0,0,0.5)", border:`1px solid ${arMode==="type"?"rgba(251,188,5,0.8)":"rgba(255,255,255,0.15)"}`, color:"#fff", fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(8px)" }}>⌨️</button>
-          {(arMode || typedText) && (
-            <button onClick={() => { clearCanvas(); setTypedText(""); setArMode(null); }} title="Clear" style={{ width:40, height:40, borderRadius:12, background:"rgba(234,67,53,0.3)", border:"1px solid rgba(234,67,53,0.6)", color:"#fff", fontSize:16, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(8px)" }}>🗑️</button>
-          )}
+          <button
+            onClick={() => setArMode(arMode==="draw" ? null : "draw")}
+            title="Draw on screen"
+            style={{
+              width:40, height:40, borderRadius:12,
+              background: arMode==="draw"?`rgba(66,133,244,0.4)`:"rgba(0,0,0,0.5)",
+              border: arMode==="draw"?`1px solid rgba(66,133,244,0.8)`:"1px solid rgba(255,255,255,0.15)",
+              color:"#fff", fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(8px)"
+            }}
+          >✏️</button>
+
+          <button onClick={scanPage}>
+            Scan Page
+          </button>
+
+          <button
+            onClick={() => setArMode(arMode==="type" ? null : "type")}
+            title="Type on screen"
+            style={{
+              width:40, height:40, borderRadius:12,
+              background: arMode==="type"?`rgba(251,188,5,0.3)`:"rgba(0,0,0,0.5)",
+              border: arMode==="type"?`1px solid rgba(251,188,5,0.7)`:"1px solid rgba(255,255,255,0.15)",
+              color:"#fff", fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(8px)"
+            }}
+          >⌨️</button>
+
+          <button
+            onClick={clearCanvas}
+            title="Clear drawing"
+            style={{
+              width:40, height:40, borderRadius:12,
+              background:"rgba(0,0,0,0.5)",
+              border:"1px solid rgba(255,255,255,0.15)",
+              color:"#FFD700", fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(8px)"
+            }}
+          >🧹</button>
         </div>
       )}
 
