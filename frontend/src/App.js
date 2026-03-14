@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import Frame from "./Frame.svg";
+import Webcam from "react-webcam"; // add at top
+
 
 // ── GEMINI API KEY HERE ──
-const GEMINI_API_KEY = "";
+const GEMINI_API_KEY = "112346534";
 
 const GEMINI_BLUE   = "#3b7ded";
 const GEMINI_RED    = "#e43e2b";
@@ -482,69 +484,98 @@ export default function ARTutorApp() {
   const [mode, setMode]             = useState("Mark Work");
   const [result, setResult]         = useState(null);
   const [history, setHistory]       = useState([]);
-  const [camState, setCamState]     = useState("prompt"); // prompt | active | denied
   const [arMode, setArMode]         = useState(null);     // null | "draw" | "type"
   const [typedText, setTypedText]   = useState("");
   const [analyzing, setAnalyzing]   = useState(false);
   const [error, setError]           = useState("");
+  const [storedImages, setStoredImages] = useState([]);
 
-  const videoRef   = useRef(null);
-  const canvasRef  = useRef(null);
+  // Webcam replaces videoRef + camState
+  const webcamRef = useRef(null);
+  const canvasRef = useRef(null);
+  
 
-  /* Start camera */
-  const startCamera = () => {
-    navigator.mediaDevices?.getUserMedia({
-      video: { facingMode:{ ideal:"environment" }, width:{ ideal:1280 }, height:{ ideal:720 } }
-    })
-    .then(stream => {
-      if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play().catch(()=>{}); }
-      setCamState("active");
-    })
-    .catch(() => setCamState("denied"));
-  };
+  // Track if user granted webcam permission
+  
+  const [webcamPermission, setWebcamPermission] = useState(false);
 
-  useEffect(() => {
-    return () => { videoRef.current?.srcObject?.getTracks().forEach(t => t.stop()); };
-  }, []);
-
-  /* Capture snapshot for history */
+  // Capture a snapshot from the webcam
   const captureSnapshot = useCallback(() => {
-    if (!videoRef.current) return null;
-    const c = document.createElement("canvas");
-    c.width  = videoRef.current.videoWidth  || 320;
-    c.height = videoRef.current.videoHeight || 240;
-    c.getContext("2d").drawImage(videoRef.current, 0, 0, c.width, c.height);
-    return c.toDataURL("image/jpeg", 0.5);
+    if (!webcamRef.current) return null;
+    return webcamRef.current.getScreenshot(); // base64 JPEG
   }, []);
+
+  // Auto-capture snapshots every 10 seconds for internal use
+  useEffect(() => {
+    if (!webcamPermission) return;
+
+    const interval = setInterval(() => {
+      const snap = captureSnapshot();
+      if (snap) setStoredImages(prev => [...prev, snap]);
+    }, 10000); // every 10 seconds
+
+    return () => clearInterval(interval);
+  }, [webcamPermission, captureSnapshot]);
 
   /* Clear drawing canvas */
   const clearCanvas = () => {
-    if (canvasRef.current) canvasRef.current.getContext("2d").clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    if (canvasRef.current) {
+      canvasRef.current.getContext("2d").clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    }
+  };
+
+  const requestCameraAccess = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      if (webcamRef.current) webcamRef.current.srcObject = stream;
+      setWebcamPermission(true);
+    } catch (e) {
+      console.error("Camera access denied", e);
+      setWebcamPermission(false);
+    }
   };
 
   /* Run Gemini analysis */
   const runAnalysis = useCallback(async (overrideText) => {
-    if (!videoRef.current || analyzing) return;
-    if (!GEMINI_API_KEY) { setError("Gemini API key at the top of App.js"); return; }
+    if (!webcamRef.current?.video || analyzing) return;
+    if (!GEMINI_API_KEY) {
+      setError("Gemini API key at the top of App.js");
+      return;
+    }
+
     setAnalyzing(true);
     setPhase("scanning");
     setError("");
+
     try {
-      const res = await analyseWithGemini(videoRef.current, canvasRef.current, mode, overrideText || typedText);
+      const res = await analyseWithGemini(
+        webcamRef.current.video,
+        canvasRef.current,
+        mode,
+        overrideText || typedText
+      );
+
       const snap = captureSnapshot();
       const entry = {
         mode,
         result: res,
         snapshot: snap,
-        timestamp: new Date().toLocaleString("en-GB", { day:"2-digit", month:"short", hour:"2-digit", minute:"2-digit" })
+        timestamp: new Date().toLocaleString("en-GB", {
+          day: "2-digit",
+          month: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
       };
+
       setHistory(h => [...h, entry]);
       setResult(res);
       setPhase("result");
-    } catch(e) {
+    } catch (e) {
       setError("Gemini error — check API key or try again.");
       setPhase("idle");
     }
+
     setAnalyzing(false);
   }, [mode, typedText, analyzing, captureSnapshot]);
 
@@ -583,29 +614,50 @@ export default function ARTutorApp() {
         input::placeholder,textarea::placeholder { color:rgba(255,255,255,0.35); }
       `}</style>
 
-      {/* ── PERMISSION SCREEN ── */}
-      {camState === "prompt" && <CameraPermissionScreen onRequest={startCamera} onDeny={() => setCamState("denied")}/>}
-
-      {/* ── LIVE CAMERA ── */}
-      <video ref={videoRef} autoPlay playsInline muted style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"cover", display: camState==="active"?"block":"none" }}/>
-
-      {/* ── DENIED FALLBACK ── */}
-      {camState === "denied" && (
-        <div style={{ position:"absolute", inset:0, background:"radial-gradient(ellipse at 60% 40%,#1a0d35 0%,#0a1228 50%,#03030c 100%)" }}>
-          <div style={{ position:"absolute", top:"44%", left:0, right:0, textAlign:"center" }}>
-            <div style={{ color:"rgba(255,255,255,0.25)", fontFamily:"'DM Sans',sans-serif", fontSize:13 }}>Camera access denied</div>
-            <button onClick={startCamera} style={{ marginTop:12, padding:"8px 20px", background:"rgba(66,133,244,0.2)", border:`1px solid rgba(66,133,244,0.4)`, borderRadius:20, color:GEMINI_BLUE, fontFamily:"'DM Sans',sans-serif", fontSize:13, cursor:"pointer" }}>Try Again</button>
-          </div>
+      {!webcamPermission && (
+        <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", background:"#000" }}>
+          <button
+            onClick={requestCameraAccess}
+            style={{
+              padding:"12px 24px",
+              fontSize:16,
+              borderRadius:8,
+              cursor:"pointer",
+              background:"#4285F4",
+              color:"#fff",
+              border:"none"
+            }}
+          >
+            Allow Camera
+          </button>
         </div>
+      )}
+      
+      {webcamPermission && (
+        <Webcam
+          audio={false}
+          ref={webcamRef}
+          screenshotFormat="image/jpeg"
+          videoConstraints={{ facingMode: "environment" }}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            zIndex: 0 // behind all AR overlays and buttons
+          }}
+        />
       )}
 
       {/* ── AR DRAWING CANVAS ── */}
-      {camState === "active" && (
+      {webcamPermission === true && (
         <ARCanvas active={arMode==="draw"} canvasRef={canvasRef} onDrawEnd={onDrawEnd}/>
       )}
 
       {/* ── SCAN OVERLAY ── */}
-      {camState === "active" && (phase==="scanning" || phase==="result") && (
+      {webcamPermission === true && (phase==="scanning" || phase==="result") && (
         <ScanOverlay scanning={phase==="scanning"} marked={phase==="result"}/>
       )}
 
@@ -624,7 +676,7 @@ export default function ARTutorApp() {
       )}
 
       {/* ── TOP BAR ── */}
-      {camState !== "prompt" && phase !== "history" && phase !== "feedback" && (
+      {webcamPermission === null && phase !== "history" && phase !== "feedback" && (
         <div style={{ position:"absolute", top:0, left:0, right:0, zIndex:10, padding:"50px 20px 14px", display:"flex", alignItems:"center", justifyContent:"space-between", background:"linear-gradient(180deg,rgba(0,0,0,0.65) 0%,transparent 100%)" }}>          
           <div style={{ display:"flex", gap:8 }}>
             {/* History (clock) */}
@@ -636,7 +688,7 @@ export default function ARTutorApp() {
       )}
 
       {/* ── AR TOOLBAR (draw / type / clear) ── */}
-      {camState === "active" && phase === "idle" && (
+      {webcamPermission === true && phase === "idle" && (
         <div style={{ position:"absolute", top:"12%", right:14, zIndex:12, display:"flex", flexDirection:"column", gap:8 }}>
           <button onClick={() => setArMode(arMode==="draw" ? null : "draw")} title="Draw on screen" style={{ width:40, height:40, borderRadius:12, background: arMode==="draw"?`rgba(66,133,244,0.4)`:"rgba(0,0,0,0.5)", border:`1px solid ${arMode==="draw"?"rgba(66,133,244,0.8)":"rgba(255,255,255,0.15)"}`, color:"#fff", fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(8px)" }}>✏️</button>
           <button onClick={() => setArMode(arMode==="type" ? null : "type")} title="Type on screen" style={{ width:40, height:40, borderRadius:12, background: arMode==="type"?`rgba(251,188,5,0.3)`:"rgba(0,0,0,0.5)", border:`1px solid ${arMode==="type"?"rgba(251,188,5,0.8)":"rgba(255,255,255,0.15)"}`, color:"#fff", fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(8px)" }}>⌨️</button>
@@ -652,7 +704,7 @@ export default function ARTutorApp() {
       )}
 
       {/* ── IDLE BOTTOM PANEL ── */}
-      {camState !== "prompt" && phase === "idle" && (
+      {webcamPermission === null && phase === "idle" && (
         <div style={{ position:"absolute", bottom:0, left:0, right:0, zIndex:10, background:"linear-gradient(180deg, transparent 30%, rgba(0,0,0,1) 90%)", padding:"20px 24px 52px", display:"flex", flexDirection:"column", alignItems:"center", gap:16, animation:"fadeIn 3s ease" }}>
           <div style={{ textAlign:"center" }}>
             <div style={{ color:"#fff", fontFamily:"'DM Sans',sans-serif", fontWeight:700, fontSize:22, marginBottom:4 }}>Mark My Work</div>
