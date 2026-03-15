@@ -1,17 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
 import './scanner.css';
 
-const images = [
+const initialImages = [
   { src: '/paper-2.png' }
 ];
 
 export const Scanner = () => {
   const containerRef = useRef(null);
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const foundPaperRef = useRef(false);
+  const captureIntervalRef = useRef(null);
   const openCvURL = 'https://docs.opencv.org/4.7.0/opencv.js';
 
   const [loadedOpenCV, setLoadedOpenCV] = useState(false);
-  const [selectedImage, setSelectedImage] = useState(images[0]);
+  const [images, setImages] = useState(initialImages);
+  const [selectedImage, setSelectedImage] = useState(initialImages[0]);
+  const [foundPaperImageSrc, setFoundPaperImageSrc] = useState(null);
   
+  // Always run the scanner on whichever image is currently in the list
+  useEffect(() => {
+    if (images.length === 0) {
+      setSelectedImage(null);
+    } else if (!selectedImage || selectedImage.src !== images[0].src) {
+      setSelectedImage(images[0]);
+    }
+  }, [images]);
 
   // after state declarations
   const loadOpenCv = (onComplete) => {
@@ -73,6 +87,7 @@ export const Scanner = () => {
 
       const imgArea = src.cols * src.rows;
       let bestScore = 0;
+      let bestAreaRatio = 0;
 
       for (let i = 0; i < contours.size(); i++) {
         const c = contours.get(i);
@@ -84,8 +99,8 @@ export const Scanner = () => {
           const area = cv.contourArea(approx);
           const areaRatio = area / imgArea;
 
-          // Skip very small or almost-full-image quads
-          if (areaRatio < 0.1 || areaRatio > 0.95) {
+          // Skip only extremely tiny or literally full-frame quads
+          if (areaRatio < 0.02 || areaRatio > 0.99) {
             approx.delete();
             c.delete();
             continue;
@@ -118,20 +133,12 @@ export const Scanner = () => {
           const avgHeight = (heightLeft + heightRight) / 2;
           const aspect = avgHeight > 0 ? avgHeight / avgWidth : 0;
 
-          // Favor aspect ratios roughly like a sheet of paper (between ~1 and 2)
-          if (aspect < 0.8 || aspect > 2.2) {
-            approx.delete();
-            c.delete();
-            continue;
-          }
-
-          // Score by area and how close the aspect ratio is to ~1.4 (A‑series paper)
-          const aspectTarget = 1.4;
-          const aspectScore = Math.exp(-Math.abs(aspect - aspectTarget));
-          const score = areaRatio * aspectScore;
+          // Score primarily by area; keep aspect in logs only so we don't over‑reject.
+          const score = areaRatio;
 
           if (score > bestScore) {
             bestScore = score;
+            bestAreaRatio = areaRatio;
             if (paperCnt) {
               paperCnt.delete();
             }
@@ -146,19 +153,37 @@ export const Scanner = () => {
       }
 
       if (!paperCnt) {
-        console.warn('[Scanner] Could not find paper contour, falling back to full image');
-        // Just return the original image as a canvas
-        const canvasFallback = document.createElement('canvas');
-        canvasFallback.width = imgElement.naturalWidth;
-        canvasFallback.height = imgElement.naturalHeight;
-        cv.imshow(canvasFallback, src);
+        console.warn('[Scanner] Could not find a suitable paper contour – treating as no paper.', {
+          imgArea,
+          bestScore,
+          bestAreaRatio,
+        });
         src.delete();
         gray.delete();
         blurred.delete();
         edged.delete();
         contours.delete();
         hierarchy.delete();
-        return canvasFallback;
+        return null;
+      }
+
+      // If the best contour is extremely small in the frame, treat it as no paper
+      // so random noise doesn't immediately trigger detection, but real pages do.
+      const minAreaRatio = 0.15;
+      if (bestAreaRatio < minAreaRatio) {
+        console.warn('[Scanner] Best contour area too small, ignoring as non‑paper:', {
+          bestAreaRatio,
+          minAreaRatio,
+          imgArea,
+        });
+        src.delete();
+        gray.delete();
+        blurred.delete();
+        edged.delete();
+        contours.delete();
+        hierarchy.delete();
+        paperCnt.delete();
+        return null;
       }
 
       // Convert contour points to array of {x,y}
@@ -313,6 +338,113 @@ export const Scanner = () => {
     });
   }, [selectedImage]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const enableCamera = async () => {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          console.warn('[Scanner] Camera not supported in this browser');
+          return;
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        if (!isMounted) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        console.error('[Scanner] Error accessing camera', err);
+      }
+    };
+
+    enableCamera();
+
+    const captureBurst = async () => {
+      if (foundPaperRef.current) return;
+
+      const video = videoRef.current;
+      if (!video || !video.srcObject || video.readyState < 2) return;
+
+      const newImages = [];
+
+      for (let i = 0; i < 10; i++) {
+        if (!video || !video.srcObject || video.readyState < 2) break;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0);
+        const dataURL = canvas.toDataURL('image/png');
+        const newImage = { src: dataURL };
+        newImages.push(newImage);
+
+        // Also try scanning this frame immediately and append any successful result
+        if (!foundPaperRef.current && window.cv && window.cv.Mat && containerRef.current) {
+          const imgEl = new Image();
+          imgEl.onload = () => {
+            try {
+              const resultCanvas = extractPaperWithOpenCV(imgEl);
+              if (resultCanvas) {
+                console.warn('[Scanner] Paper detected! Stopping camera and capture.');
+
+                // Mark that we've found paper and stop further captures
+                foundPaperRef.current = true;
+                containerRef.current.append(resultCanvas);
+
+                // Remember which frame produced this result
+                setFoundPaperImageSrc(dataURL);
+
+                if (captureIntervalRef.current) {
+                  clearInterval(captureIntervalRef.current);
+                  captureIntervalRef.current = null;
+                }
+
+                if (streamRef.current) {
+                  streamRef.current.getTracks().forEach((t) => t.stop());
+                  streamRef.current = null;
+                }
+              }
+            } catch (err) {
+              console.error('[Scanner] Error scanning burst frame', err);
+            }
+          };
+          imgEl.src = dataURL;
+        }
+
+        // Small delay between frames in the burst to reduce motion blur
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      if (newImages.length > 0) {
+        setImages(newImages);
+      }
+    };
+
+    const captureInterval = setInterval(() => {
+      captureBurst();
+    }, 3000);
+    captureIntervalRef.current = captureInterval;
+
+    return () => {
+      if (captureIntervalRef.current) {
+        clearInterval(captureIntervalRef.current);
+        captureIntervalRef.current = null;
+      }
+      isMounted = false;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+    };
+  }, []);
+
 
   return (
     <div className="scanner-container">
@@ -321,12 +453,26 @@ export const Scanner = () => {
         {images.map((image, index) => (
           <img
             key={index}
-            className={selectedImage && selectedImage.src === image.src ? 'selected' : ''}
+            className={[
+              selectedImage && selectedImage.src === image.src ? 'selected' : '',
+              foundPaperImageSrc && foundPaperImageSrc === image.src ? 'found-paper' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
             src={image.src}
             onClick={() => setSelectedImage(image)}
             alt={`Paper ${index + 1}`}
           />
         ))}
+        <div className="scanner-camera">
+          <h3>Camera</h3>
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+          />
+        </div>
       </div>
       <div ref={containerRef} id="result-container"></div>
     </div>

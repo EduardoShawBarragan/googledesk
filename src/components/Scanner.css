@@ -22,9 +22,24 @@
   border-color: #007bff;
 }
 
+.scanner-thumbnails img.found-paper {
+  border-color: #28a745;
+  box-shadow: 0 0 6px rgba(40, 167, 69, 0.7);
+}
+
 #result-container canvas {
   margin: 10px;
   max-width: 100%;
   border: 1px solid #ccc;
   border-radius: 5px;
+}
+
+.scanner-camera {
+  margin-top: 20px;
+}
+
+.scanner-camera video {
+  width: 240px;
+  border-radius: 5px;
+  border: 1px solid #ccc;
 }
