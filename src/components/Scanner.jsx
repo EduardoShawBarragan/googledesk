@@ -209,6 +209,9 @@ export const Scanner = () => {
       const imgH = imgElement.naturalHeight;
 
       // If no explicit target size, derive from the detected quadrilateral
+      // and scale up for higher-resolution output.
+      // 3× gives noticeably crisper text while staying performant.
+      const resolutionScale = 3;
       if (!targetWidth || !targetHeight) {
         const dist = (p1, p2) =>
           Math.sqrt((p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y));
@@ -221,8 +224,8 @@ export const Scanner = () => {
         const heightRight = dist(tr, br);
         const rawHeight = Math.max(heightLeft, heightRight);
 
-        targetWidth = Math.round(rawWidth);
-        targetHeight = Math.round(rawHeight);
+        targetWidth = Math.round(rawWidth * resolutionScale);
+        targetHeight = Math.round(rawHeight * resolutionScale);
 
         console.log('[Scanner] Using detected paper quad and derived size', {
           imgW,
@@ -251,8 +254,8 @@ export const Scanner = () => {
       const M = cv.getPerspectiveTransform(srcTri, dstTri);
       const dst = new cv.Mat();
       const dsize = new cv.Size(targetWidth, targetHeight);
-      // Use INTER_LINEAR with modest scale to preserve edge sharpness
-      cv.warpPerspective(src, dst, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+      // Use INTER_CUBIC for higher-quality upscaling of text and edges
+      cv.warpPerspective(src, dst, M, dsize, cv.INTER_CUBIC, cv.BORDER_CONSTANT, new cv.Scalar());
 
       // Create a canvas and draw the color result
       const canvas = document.createElement('canvas');
@@ -372,6 +375,7 @@ export const Scanner = () => {
       if (!video || !video.srcObject || video.readyState < 2) return;
 
       const newImages = [];
+      const candidates = [];
 
       for (let i = 0; i < 10; i++) {
         if (!video || !video.srcObject || video.readyState < 2) break;
@@ -385,37 +389,25 @@ export const Scanner = () => {
         const newImage = { src: dataURL };
         newImages.push(newImage);
 
-        // Also try scanning this frame immediately and append any successful result
-        if (!foundPaperRef.current && window.cv && window.cv.Mat && containerRef.current) {
-          const imgEl = new Image();
-          imgEl.onload = () => {
-            try {
-              const resultCanvas = extractPaperWithOpenCV(imgEl);
-              if (resultCanvas) {
-                console.warn('[Scanner] Paper detected! Stopping camera and capture.');
-
-                // Mark that we've found paper and stop further captures
-                foundPaperRef.current = true;
-                containerRef.current.append(resultCanvas);
-
-                // Remember which frame produced this result
-                setFoundPaperImageSrc(dataURL);
-
-                if (captureIntervalRef.current) {
-                  clearInterval(captureIntervalRef.current);
-                  captureIntervalRef.current = null;
+        if (window.cv && window.cv.Mat && containerRef.current) {
+          await new Promise((resolve) => {
+            const imgEl = new Image();
+            imgEl.onload = () => {
+              try {
+                const resultCanvas = extractPaperWithOpenCV(imgEl);
+                if (resultCanvas) {
+                  // Use output resolution as a proxy for quality/clearness.
+                  const qualityScore = resultCanvas.width * resultCanvas.height;
+                  candidates.push({ dataURL, resultCanvas, qualityScore });
                 }
-
-                if (streamRef.current) {
-                  streamRef.current.getTracks().forEach((t) => t.stop());
-                  streamRef.current = null;
-                }
+              } catch (err) {
+                console.error('[Scanner] Error scanning burst frame', err);
+              } finally {
+                resolve();
               }
-            } catch (err) {
-              console.error('[Scanner] Error scanning burst frame', err);
-            }
-          };
-          imgEl.src = dataURL;
+            };
+            imgEl.src = dataURL;
+          });
         }
 
         // Small delay between frames in the burst to reduce motion blur
@@ -424,6 +416,30 @@ export const Scanner = () => {
 
       if (newImages.length > 0) {
         setImages(newImages);
+      }
+
+      // After the whole burst, pick the best (largest, clearest) successful frame.
+      if (!foundPaperRef.current && candidates.length > 0) {
+        candidates.sort((a, b) => b.qualityScore - a.qualityScore);
+        const best = candidates[0];
+
+        console.warn('[Scanner] Paper detected in burst. Using best frame and stopping camera.', {
+          qualityScore: best.qualityScore,
+        });
+
+        foundPaperRef.current = true;
+        containerRef.current.append(best.resultCanvas);
+        setFoundPaperImageSrc(best.dataURL);
+
+        if (captureIntervalRef.current) {
+          clearInterval(captureIntervalRef.current);
+          captureIntervalRef.current = null;
+        }
+
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((t) => t.stop());
+          streamRef.current = null;
+        }
       }
     };
 
