@@ -293,7 +293,6 @@ const FeedbackPanel = ({ result, mode, onClose, onAskMore }) => {
       </div>
       <div style={{ padding:'6px 20px 14px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
         <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-          <GoogleDeskIcon size={28}/>
           <div>
             <div style={{ color:'#fff', fontFamily:"'DM Sans',sans-serif", fontWeight:700, fontSize:15 }}>Google Desk</div>
             <div style={{ color:'rgba(255,255,255,0.4)', fontSize:11, fontFamily:'monospace' }}>
