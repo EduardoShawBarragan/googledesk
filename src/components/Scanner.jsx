@@ -615,7 +615,9 @@ export const Scanner = () => {
           return;
         }
 
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' }, // rear camera on mobile for scanning
+        });
         if (!isMounted) {
           stream.getTracks().forEach((t) => t.stop());
           return;
