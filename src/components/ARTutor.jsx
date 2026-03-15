@@ -353,7 +353,6 @@ const HistoryPanel = ({ history, onClose }) => (
   <div style={{ position:'absolute', inset:0, zIndex:40, background:'rgba(5,5,15,0.98)', display:'flex', flexDirection:'column', fontFamily:"'DM Sans',sans-serif" }}>
     <div style={{ padding:'52px 20px 14px', display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom:'1px solid rgba(255,255,255,0.07)' }}>
       <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-        <GoogleDeskIcon size={28}/>
         <div>
           <div style={{ color:'#fff', fontWeight:700, fontSize:16 }}>Work History</div>
           <div style={{ color:'rgba(255,255,255,0.4)', fontSize:11 }}>{history.length} session{history.length!==1?'s':''} saved</div>
