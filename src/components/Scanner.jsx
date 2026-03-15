@@ -43,9 +43,9 @@ export const Scanner = () => {
     document.body.appendChild(script);
   };
 
-  // For this specific demo image (paper-2), use a fixed quadrilateral
-  // that approximates the four corners of the sheet, then rectify it.
-  // This avoids the contour-detection errors that were badly distorting the page.
+  // Use OpenCV to automatically detect the paper in any input image,
+  // then perform a perspective warp so the result is just the page.
+  // This is now fully generic (no hard‑coded coordinates for paper‑2).
   const extractPaperWithOpenCV = (imgElement, targetWidth, targetHeight) => {
     const cv = window.cv;
     if (!cv || !cv.Mat) {
@@ -53,34 +53,157 @@ export const Scanner = () => {
       return null;
     }
 
-    let src;
+    let src, gray, blurred, edged, contours, hierarchy;
+    let paperCnt = null;
 
     try {
       src = cv.imread(imgElement);
+      gray = new cv.Mat();
+      blurred = new cv.Mat();
+      edged = new cv.Mat();
+
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+      // Light blur to knock down noise but keep edges
+      cv.GaussianBlur(gray, blurred, new cv.Size(3, 3), 0, 0, cv.BORDER_DEFAULT);
+      cv.Canny(blurred, edged, 60, 180);
+
+      contours = new cv.MatVector();
+      hierarchy = new cv.Mat();
+      cv.findContours(edged, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
+      const imgArea = src.cols * src.rows;
+      let bestScore = 0;
+
+      for (let i = 0; i < contours.size(); i++) {
+        const c = contours.get(i);
+        const peri = cv.arcLength(c, true);
+        const approx = new cv.Mat();
+        cv.approxPolyDP(c, approx, 0.02 * peri, true);
+
+        if (approx.rows === 4) {
+          const area = cv.contourArea(approx);
+          const areaRatio = area / imgArea;
+
+          // Skip very small or almost-full-image quads
+          if (areaRatio < 0.1 || areaRatio > 0.95) {
+            approx.delete();
+            c.delete();
+            continue;
+          }
+
+          // Compute a rough aspect ratio to favor paper‑like rectangles
+          const ptsTmp = [];
+          for (let j = 0; j < approx.rows; j++) {
+            const x = approx.intAt(j, 0);
+            const y = approx.intAt(j, 1);
+            ptsTmp.push({ x, y });
+          }
+          ptsTmp.sort((a, b) => a.y - b.y);
+          const top = ptsTmp.slice(0, 2).sort((a, b) => a.x - b.x);
+          const bottom = ptsTmp.slice(2, 4).sort((a, b) => a.x - b.x);
+          const tlCand = top[0];
+          const trCand = top[1];
+          const brCand = bottom[1];
+          const blCand = bottom[0];
+
+          const dist = (p1, p2) =>
+            Math.sqrt((p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y));
+
+          const widthTop = dist(tlCand, trCand);
+          const widthBottom = dist(blCand, brCand);
+          const heightLeft = dist(tlCand, blCand);
+          const heightRight = dist(trCand, brCand);
+
+          const avgWidth = (widthTop + widthBottom) / 2;
+          const avgHeight = (heightLeft + heightRight) / 2;
+          const aspect = avgHeight > 0 ? avgHeight / avgWidth : 0;
+
+          // Favor aspect ratios roughly like a sheet of paper (between ~1 and 2)
+          if (aspect < 0.8 || aspect > 2.2) {
+            approx.delete();
+            c.delete();
+            continue;
+          }
+
+          // Score by area and how close the aspect ratio is to ~1.4 (A‑series paper)
+          const aspectTarget = 1.4;
+          const aspectScore = Math.exp(-Math.abs(aspect - aspectTarget));
+          const score = areaRatio * aspectScore;
+
+          if (score > bestScore) {
+            bestScore = score;
+            if (paperCnt) {
+              paperCnt.delete();
+            }
+            paperCnt = approx; // keep this approx
+          } else {
+            approx.delete();
+          }
+        } else {
+          approx.delete();
+        }
+        c.delete();
+      }
+
+      if (!paperCnt) {
+        console.warn('[Scanner] Could not find paper contour, falling back to full image');
+        // Just return the original image as a canvas
+        const canvasFallback = document.createElement('canvas');
+        canvasFallback.width = imgElement.naturalWidth;
+        canvasFallback.height = imgElement.naturalHeight;
+        cv.imshow(canvasFallback, src);
+        src.delete();
+        gray.delete();
+        blurred.delete();
+        edged.delete();
+        contours.delete();
+        hierarchy.delete();
+        return canvasFallback;
+      }
+
+      // Convert contour points to array of {x,y}
+      const pts = [];
+      for (let i = 0; i < paperCnt.rows; i++) {
+        const x = paperCnt.intAt(i, 0);
+        const y = paperCnt.intAt(i, 1);
+        pts.push({ x, y });
+      }
+
+      // Order points: top-left, top-right, bottom-right, bottom-left
+      pts.sort((a, b) => a.y - b.y);
+      const top = pts.slice(0, 2).sort((a, b) => a.x - b.x);
+      const bottom = pts.slice(2, 4).sort((a, b) => a.x - b.x);
+      const tl = top[0];
+      const tr = top[1];
+      const br = bottom[1];
+      const bl = bottom[0];
+
+      const ordered = [tl, tr, br, bl];
 
       const imgW = imgElement.naturalWidth;
       const imgH = imgElement.naturalHeight;
 
-      // Approximate the four corners of the paper in this specific image,
-      // measured as fractions of the image dimensions.
-      const tl = { x: 0.16 * imgW, y: 0.05 * imgH };
-      const tr = { x: 0.93 * imgW, y: 0.08 * imgH };
-      const br = { x: 0.96 * imgW, y: 0.96 * imgH };
-      const bl = { x: 0.12 * imgW, y: 0.98 * imgH };
-
-      const ordered = [tl, tr, br, bl];
-
-      // If no explicit target size, derive from the approximated quadrilateral
+      // If no explicit target size, derive from the detected quadrilateral
       if (!targetWidth || !targetHeight) {
-        const rawWidth = imgW * 0.8;  // approximate paper width span
-        const rawHeight = imgH * 0.9; // approximate paper height span
+        const dist = (p1, p2) =>
+          Math.sqrt((p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y));
+
+        const widthTop = dist(tl, tr);
+        const widthBottom = dist(bl, br);
+        const rawWidth = Math.max(widthTop, widthBottom);
+
+        const heightLeft = dist(tl, bl);
+        const heightRight = dist(tr, br);
+        const rawHeight = Math.max(heightLeft, heightRight);
 
         targetWidth = Math.round(rawWidth);
         targetHeight = Math.round(rawHeight);
 
-        console.log('[Scanner] Using fixed paper quad and size', {
+        console.log('[Scanner] Using detected paper quad and derived size', {
           imgW,
           imgH,
+          rawWidth,
+          rawHeight,
           targetWidth,
           targetHeight,
         });
@@ -114,6 +237,12 @@ export const Scanner = () => {
 
       // Cleanup
       src.delete();
+      gray.delete();
+      blurred.delete();
+      edged.delete();
+      contours.delete();
+      hierarchy.delete();
+      paperCnt.delete();
       srcTri.delete();
       dstTri.delete();
       M.delete();
@@ -124,6 +253,12 @@ export const Scanner = () => {
       console.error('[Scanner] Error in extractPaperWithOpenCV', err);
       // Cleanup best-effort
       src && src.delete();
+      gray && gray.delete();
+      blurred && blurred.delete();
+      edged && edged.delete();
+      contours && contours.delete();
+      hierarchy && hierarchy.delete();
+      paperCnt && paperCnt.delete();
       return null;
     }
   };
