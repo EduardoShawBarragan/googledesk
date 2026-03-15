@@ -23,6 +23,7 @@ export const Scanner = () => {
   const [images, setImages] = useState(initialImages);
   const [selectedImage, setSelectedImage] = useState(initialImages[0]);
   const [foundPaperImageSrc, setFoundPaperImageSrc] = useState(null);
+  const [facingMode, setFacingMode] = useState('environment'); // 'user' = front, 'environment' = back
   
   // Always run the scanner on whichever image is currently in the list
   useEffect(() => {
@@ -614,10 +615,14 @@ export const Scanner = () => {
           console.warn('[Scanner] Camera not supported in this browser');
           return;
         }
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((t) => t.stop());
+          streamRef.current = null;
+        }
 
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: true, // use default camera (e.g. external on desktop)
-          audio: true, // keep mic on for listening
+          video: { facingMode },
+          audio: true,
         });
         if (!isMounted) {
           stream.getTracks().forEach((t) => t.stop());
@@ -634,6 +639,15 @@ export const Scanner = () => {
     };
 
     enableCamera();
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, [facingMode]);
+
+  useEffect(() => {
+    let isMounted = true;
 
     // Preload AR overlay SVG as an image so we can draw it fast on the canvas
     if (!arImageRef.current) {
@@ -1067,6 +1081,16 @@ export const Scanner = () => {
           />
           <canvas ref={overlayRef} className="scanner-overlay" />
         </div>
+        <button
+          type="button"
+          className="scanner-switch-camera-button"
+          aria-label="Switch camera"
+          onClick={() => setFacingMode((prev) => (prev === 'user' ? 'environment' : 'user'))}
+        >
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+            <path d="M7 10l4-4 4 4M7 14l4 4 4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
         <button type="button" className="scanner-center-button" aria-label="Action">
           <img src="/logoA.svg" alt="" />
         </button>
