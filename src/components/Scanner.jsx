@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import './scanner.css';
+import './Scanner.css';
 
 const initialImages = [
   { src: '/paper-2.png' }
