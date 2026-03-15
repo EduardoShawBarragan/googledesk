@@ -402,6 +402,53 @@ export const Scanner = () => {
 
       if (!quad || quad.length !== 4) return;
 
+      // Draw AR content first (warped to quad), then outline on top
+      const arImg = arImageRef.current;
+      const cv = window.cv;
+      if (arImg && cv && cv.Mat && cv.getPerspectiveTransform && cv.warpPerspective) {
+        const srcW = arImg.naturalWidth || arImg.width || 200;
+        const srcH = arImg.naturalHeight || arImg.height || 300;
+
+        const srcCanvas = document.createElement('canvas');
+        srcCanvas.width = srcW;
+        srcCanvas.height = srcH;
+        const srcCtx = srcCanvas.getContext('2d');
+        srcCtx.drawImage(arImg, 0, 0, srcW, srcH);
+
+        const srcMat = cv.imread(srcCanvas);
+        const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+          0, 0,
+          srcW, 0,
+          srcW, srcH,
+          0, srcH,
+        ]);
+        const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+          quad[0].x, quad[0].y,
+          quad[1].x, quad[1].y,
+          quad[2].x, quad[2].y,
+          quad[3].x, quad[3].y,
+        ]);
+        const M = cv.getPerspectiveTransform(srcTri, dstTri);
+        const dsize = new cv.Size(overlay.width, overlay.height);
+        const warped = new cv.Mat();
+        cv.warpPerspective(srcMat, warped, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = overlay.width;
+        tempCanvas.height = overlay.height;
+        cv.imshow(tempCanvas, warped);
+
+        ctx.globalAlpha = 0.95;
+        ctx.drawImage(tempCanvas, 0, 0);
+        ctx.globalAlpha = 1;
+
+        srcMat.delete();
+        srcTri.delete();
+        dstTri.delete();
+        M.delete();
+        warped.delete();
+      }
+
       ctx.strokeStyle = '#00ff4d';
       ctx.lineWidth = 3;
       ctx.beginPath();
@@ -411,27 +458,6 @@ export const Scanner = () => {
       ctx.lineTo(quad[3].x, quad[3].y);
       ctx.closePath();
       ctx.stroke();
-
-      // Simple AR: draw the SVG roughly aligned to the detected quad
-      const arImg = arImageRef.current;
-      if (arImg) {
-        const xs = quad.map((p) => p.x);
-        const ys = quad.map((p) => p.y);
-        const minX = Math.min(...xs);
-        const maxX = Math.max(...xs);
-        const minY = Math.min(...ys);
-        const maxY = Math.max(...ys);
-
-        const w = maxX - minX;
-        const h = maxY - minY;
-
-        if (w > 0 && h > 0) {
-          ctx.save();
-          ctx.globalAlpha = 0.9;
-          ctx.drawImage(arImg, minX, minY, w, h);
-          ctx.restore();
-        }
-      }
     };
 
     const captureBurst = async () => {
