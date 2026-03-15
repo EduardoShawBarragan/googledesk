@@ -617,6 +617,7 @@ export const Scanner = () => {
 
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'environment' }, // rear camera on mobile for scanning
+          audio: true, // keep mic on for listening
         });
         if (!isMounted) {
           stream.getTracks().forEach((t) => t.stop());
@@ -1077,6 +1078,9 @@ export const Scanner = () => {
           />
           <canvas ref={overlayRef} className="scanner-overlay" />
         </div>
+        <button type="button" className="scanner-center-button" aria-label="Action">
+          <img src="/logoA.svg" alt="" />
+        </button>
       </div>
     </div>
   );
