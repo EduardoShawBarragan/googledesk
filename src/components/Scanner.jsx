@@ -9,6 +9,8 @@ export const Scanner = () => {
   const containerRef = useRef(null);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const overlayRef = useRef(null);
+  const arImageRef = useRef(null);
   const foundPaperRef = useRef(false);
   const captureIntervalRef = useRef(null);
   const openCvURL = 'https://docs.opencv.org/4.7.0/opencv.js';
@@ -205,6 +207,11 @@ export const Scanner = () => {
 
       const ordered = [tl, tr, br, bl];
 
+      // Expose the detected quad so the live video overlay can draw it
+      if (typeof window !== 'undefined') {
+        window.lastDetectedQuad = ordered.map((p) => ({ x: p.x, y: p.y }));
+      }
+
       const imgW = imgElement.naturalWidth;
       const imgH = imgElement.naturalHeight;
 
@@ -368,16 +375,72 @@ export const Scanner = () => {
 
     enableCamera();
 
-    const captureBurst = async () => {
-      if (foundPaperRef.current) return;
+    // Preload AR overlay SVG as an image so we can draw it fast on the canvas
+    if (!arImageRef.current) {
+      const img = new Image();
+      img.src = '/usethis.svg';
+      img.onload = () => {
+        arImageRef.current = img;
+        console.log('[Scanner] AR overlay image loaded');
+      };
+    }
 
+    const drawQuadOverlay = (quad) => {
+      const video = videoRef.current;
+      const overlay = overlayRef.current;
+      if (!overlay || !video) return;
+
+      const width = video.videoWidth || overlay.width;
+      const height = video.videoHeight || overlay.height;
+      if (!width || !height) return;
+
+      overlay.width = width;
+      overlay.height = height;
+
+      const ctx = overlay.getContext('2d');
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+      if (!quad || quad.length !== 4) return;
+
+      ctx.strokeStyle = '#00ff4d';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(quad[0].x, quad[0].y);
+      ctx.lineTo(quad[1].x, quad[1].y);
+      ctx.lineTo(quad[2].x, quad[2].y);
+      ctx.lineTo(quad[3].x, quad[3].y);
+      ctx.closePath();
+      ctx.stroke();
+
+      // Simple AR: draw the SVG roughly aligned to the detected quad
+      const arImg = arImageRef.current;
+      if (arImg) {
+        const xs = quad.map((p) => p.x);
+        const ys = quad.map((p) => p.y);
+        const minX = Math.min(...xs);
+        const maxX = Math.max(...xs);
+        const minY = Math.min(...ys);
+        const maxY = Math.max(...ys);
+
+        const w = maxX - minX;
+        const h = maxY - minY;
+
+        if (w > 0 && h > 0) {
+          ctx.save();
+          ctx.globalAlpha = 0.9;
+          ctx.drawImage(arImg, minX, minY, w, h);
+          ctx.restore();
+        }
+      }
+    };
+
+    const captureBurst = async () => {
       const video = videoRef.current;
       if (!video || !video.srcObject || video.readyState < 2) return;
 
-      const newImages = [];
       const candidates = [];
 
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 3; i++) {
         if (!video || !video.srcObject || video.readyState < 2) break;
 
         const canvas = document.createElement('canvas');
@@ -386,19 +449,17 @@ export const Scanner = () => {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(video, 0, 0);
         const dataURL = canvas.toDataURL('image/png');
-        const newImage = { src: dataURL };
-        newImages.push(newImage);
 
-        if (window.cv && window.cv.Mat && containerRef.current) {
+        if (window.cv && window.cv.Mat) {
           await new Promise((resolve) => {
             const imgEl = new Image();
             imgEl.onload = () => {
               try {
                 const resultCanvas = extractPaperWithOpenCV(imgEl);
-                if (resultCanvas) {
-                  // Use output resolution as a proxy for quality/clearness.
+                const quad = window.lastDetectedQuad;
+                if (resultCanvas && quad && quad.length === 4) {
                   const qualityScore = resultCanvas.width * resultCanvas.height;
-                  candidates.push({ dataURL, resultCanvas, qualityScore });
+                  candidates.push({ quad, qualityScore });
                 }
               } catch (err) {
                 console.error('[Scanner] Error scanning burst frame', err);
@@ -414,43 +475,31 @@ export const Scanner = () => {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
 
-      if (newImages.length > 0) {
-        setImages(newImages);
-      }
-
-      // After the whole burst, pick the best (largest, clearest) successful frame.
-      if (!foundPaperRef.current && candidates.length > 0) {
+      // Don't update images state – we only draw the overlay; keeps video visible.
+      if (candidates.length > 0) {
         candidates.sort((a, b) => b.qualityScore - a.qualityScore);
         const best = candidates[0];
-
-        console.warn('[Scanner] Paper detected in burst. Using best frame and stopping camera.', {
+        console.warn('[Scanner] Paper detected in burst; drawing best quad overlay.', {
           qualityScore: best.qualityScore,
         });
-
-        foundPaperRef.current = true;
-        containerRef.current.append(best.resultCanvas);
-        setFoundPaperImageSrc(best.dataURL);
-
-        if (captureIntervalRef.current) {
-          clearInterval(captureIntervalRef.current);
-          captureIntervalRef.current = null;
-        }
-
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach((t) => t.stop());
-          streamRef.current = null;
-        }
+        drawQuadOverlay(best.quad);
+      } else {
+        drawQuadOverlay(null);
       }
     };
 
-    const captureInterval = setInterval(() => {
-      captureBurst();
-    }, 3000);
-    captureIntervalRef.current = captureInterval;
+    const runLoop = () => {
+      captureBurst().finally(() => {
+        if (captureIntervalRef.current !== null) {
+          captureIntervalRef.current = setTimeout(runLoop, 0);
+        }
+      });
+    };
+    captureIntervalRef.current = setTimeout(runLoop, 0);
 
     return () => {
-      if (captureIntervalRef.current) {
-        clearInterval(captureIntervalRef.current);
+      if (captureIntervalRef.current != null) {
+        clearTimeout(captureIntervalRef.current);
         captureIntervalRef.current = null;
       }
       isMounted = false;
@@ -464,33 +513,18 @@ export const Scanner = () => {
 
   return (
     <div className="scanner-container">
-      <div className="scanner-thumbnails">
-        {!loadedOpenCV && <h2>Loading OpenCV...</h2>}
-        {images.map((image, index) => (
-          <img
-            key={index}
-            className={[
-              selectedImage && selectedImage.src === image.src ? 'selected' : '',
-              foundPaperImageSrc && foundPaperImageSrc === image.src ? 'found-paper' : '',
-            ]
-              .filter(Boolean)
-              .join(' ')}
-            src={image.src}
-            onClick={() => setSelectedImage(image)}
-            alt={`Paper ${index + 1}`}
-          />
-        ))}
-        <div className="scanner-camera">
-          <h3>Camera</h3>
+      <div className="scanner-camera">
+        <h3>Camera</h3>
+        <div className="scanner-camera-video-wrapper">
           <video
             ref={videoRef}
             autoPlay
             playsInline
             muted
           />
+          <canvas ref={overlayRef} className="scanner-overlay" />
         </div>
       </div>
-      <div ref={containerRef} id="result-container"></div>
     </div>
   );
 };

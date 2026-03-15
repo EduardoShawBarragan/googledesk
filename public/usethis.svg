@@ -1,0 +1,16 @@
+<svg width="200" height="300" viewBox="0 0 200 300" xmlns="http://www.w3.org/2000/svg">
+  <!-- Pot -->
+  <rect x="70" y="250" width="60" height="30" fill="#8B4513" stroke="#5C3317" stroke-width="2"/>
+  
+  <!-- Stem -->
+  <rect x="95" y="100" width="10" height="150" fill="#228B22"/>
+  
+  <!-- Leaves -->
+  <ellipse cx="100" cy="130" rx="25" ry="10" fill="#32CD32"/>
+  <ellipse cx="100" cy="160" rx="30" ry="12" fill="#32CD32"/>
+  <ellipse cx="100" cy="190" rx="20" ry="8" fill="#32CD32"/>
+  <ellipse cx="100" cy="220" rx="25" ry="10" fill="#32CD32"/>
+  
+  <!-- Flower -->
+  <circle cx="100" cy="90" r="15" fill="#FF69B4" stroke="#FF1493" stroke-width="2"/>
+</svg>

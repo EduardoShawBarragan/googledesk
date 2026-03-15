@@ -39,7 +39,24 @@
 }
 
 .scanner-camera video {
-  width: 240px;
+  width: 100%;
+  max-width: 720px;
+  min-width: 320px;
   border-radius: 5px;
   border: 1px solid #ccc;
+  display: block;
+}
+
+.scanner-camera-video-wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+.scanner-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
