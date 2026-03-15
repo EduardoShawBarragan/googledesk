@@ -616,7 +616,7 @@ export const Scanner = () => {
         }
 
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' }, // rear camera on mobile for scanning
+          video: true, // use default camera (e.g. external on desktop)
           audio: true, // keep mic on for listening
         });
         if (!isMounted) {
@@ -663,8 +663,7 @@ export const Scanner = () => {
       const win = typeof window !== 'undefined' ? window : null;
       const hasDebug =
         win &&
-        ( (win.lastDetectionRejectedContourAreaFull && win.lastDetectionRejectedContourAreaFull.length > 0) ||
-          (win.lastDetectionRejectedNotQuadFull && win.lastDetectionRejectedNotQuadFull.length > 0) ||
+        ( (win.lastDetectionRejectedNotQuadFull && win.lastDetectionRejectedNotQuadFull.length > 0) ||
           (win.lastDetectionRejectedQuadAreaFull && win.lastDetectionRejectedQuadAreaFull.length > 0) ||
           (win.lastDetectionRejectedTooSmallFull && win.lastDetectionRejectedTooSmallFull.length > 0) ||
           (win.lastDetectionCandidatesFull && win.lastDetectionCandidatesFull.length > 0) );
@@ -740,19 +739,7 @@ export const Scanner = () => {
       }
 
       // ---- Rejected and candidate overlays (so you can see why things were accepted/rejected) ----
-      // 1) Contours rejected for area (too small or too large) – gray boxes
-      const rejectedRects = win ? win.lastDetectionRejectedContourAreaFull : null;
-      if (rejectedRects && rejectedRects.length > 0) {
-        ctx.strokeStyle = '#888888';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([2, 2]);
-        for (const r of rejectedRects) {
-          ctx.strokeRect(r.x, r.y, r.width, r.height);
-        }
-        ctx.setLineDash([]);
-      }
-
-      // 2) Approx polygon not 4 points (triangle, pentagon, etc.) – magenta; if 3 points work, complete and show quad
+      // 1) Approx polygon not 4 points (triangle, pentagon, etc.) – magenta; if 3 points work, complete and show quad
       const rejectedNotQuad = win ? win.lastDetectionRejectedNotQuadFull : null;
       if (rejectedNotQuad && rejectedNotQuad.length > 0) {
         ctx.strokeStyle = '#ff00ff';
@@ -897,9 +884,11 @@ export const Scanner = () => {
       const video = videoRef.current;
       if (!video || !video.srcObject || video.readyState < 2) return;
 
-      const candidates = [];
       const vw = video.videoWidth;
       const vh = video.videoHeight;
+      if (!vw || !vh || vw < 50 || vh < 50) return;
+
+      const candidates = [];
       const scale = Math.min(1, DETECT_MAX_PX / Math.max(vw, vh));
       const sw = Math.round(vw * scale);
       const sh = Math.round(vh * scale);
