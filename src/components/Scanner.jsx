@@ -466,7 +466,7 @@ export const Scanner = () => {
 
       const candidates = [];
 
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 1; i++) {
         if (!video || !video.srcObject || video.readyState < 2) break;
 
         const canvas = document.createElement('canvas');
