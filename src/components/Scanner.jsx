@@ -83,7 +83,7 @@ export const Scanner = () => {
       const aA = angleAt(A, B, C), aB = angleAt(B, A, C), aC = angleAt(C, A, B);
       const rightIdx = [aA, aB, aC].findIndex((a) => Math.abs(a - 90) < 25);
       if (rightIdx < 0) return null;
-      const vertex = points[rightIdx];
+      const vertex = points[rightIdx]; 
       const others = points.filter((_, i) => i !== rightIdx);
       const D = { x: others[0].x + others[1].x - vertex.x, y: others[0].y + others[1].y - vertex.y };
       const four = [...points, D];
