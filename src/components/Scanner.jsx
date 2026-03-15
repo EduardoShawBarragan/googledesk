@@ -11,6 +11,8 @@ export const Scanner = () => {
   const streamRef = useRef(null);
   const overlayRef = useRef(null);
   const arImageRef = useRef(null);
+  const smoothedQuadRef = useRef(null);
+  const missFrameCountRef = useRef(0);
   const foundPaperRef = useRef(false);
   const captureIntervalRef = useRef(null);
   const openCvURL = 'https://docs.opencv.org/4.7.0/opencv.js';
@@ -59,6 +61,65 @@ export const Scanner = () => {
     document.body.appendChild(script);
   };
 
+  // A4 aspect ratio: short : long = 1 : √2 (portrait height = width * √2)
+  const A4_RATIO = Math.SQRT2;
+
+  // Complete 2 or 3 visible corners to a full 4-point quad assuming A4 and perpendicular sides.
+  // Returns [tl, tr, br, bl] or null if invalid.
+  const completeA4Quad = (points) => {
+    const dist = (a, b) => Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+
+    if (points.length === 3) {
+      const [A, B, C] = points;
+      const angleAt = (v, p1, p2) => {
+        const ux = p1.x - v.x, uy = p1.y - v.y;
+        const wx = p2.x - v.x, wy = p2.y - v.y;
+        const dot = ux * wx + uy * wy;
+        const len = Math.sqrt((ux * ux + uy * uy) * (wx * wx + wy * wy)) || 1e-6;
+        return (Math.acos(Math.max(-1, Math.min(1, dot / len))) * 180) / Math.PI;
+      };
+      const aA = angleAt(A, B, C), aB = angleAt(B, A, C), aC = angleAt(C, A, B);
+      const rightIdx = [aA, aB, aC].findIndex((a) => Math.abs(a - 90) < 25);
+      if (rightIdx < 0) return null;
+      const vertex = points[rightIdx];
+      const others = points.filter((_, i) => i !== rightIdx);
+      const D = { x: others[0].x + others[1].x - vertex.x, y: others[0].y + others[1].y - vertex.y };
+      const four = [...points, D];
+      four.sort((a, b) => a.y - b.y);
+      const top = four.slice(0, 2).sort((a, b) => a.x - b.x);
+      const bottom = four.slice(2, 4).sort((a, b) => a.x - b.x);
+      return [top[0], top[1], bottom[1], bottom[0]];
+    }
+
+    if (points.length === 2) {
+      const [A, B] = points;
+      const dx = B.x - A.x, dy = B.y - A.y;
+      const len = Math.sqrt(dx * dx + dy * dy) || 1e-6;
+      const horizontal = Math.abs(dx) >= Math.abs(dy);
+      let w, h, perpX, perpY;
+      if (horizontal) {
+        w = len;
+        h = w * A4_RATIO;
+        perpX = -dy / len;
+        perpY = dx / len;
+      } else {
+        h = len;
+        w = h / A4_RATIO;
+        perpX = dy / len;
+        perpY = -dx / len;
+      }
+      const C = { x: B.x + perpX * h, y: B.y + perpY * h };
+      const D = { x: A.x + perpX * h, y: A.y + perpY * h };
+      const four = [A, B, C, D];
+      four.sort((a, b) => a.y - b.y);
+      const top = four.slice(0, 2).sort((a, b) => a.x - b.x);
+      const bottom = four.slice(2, 4).sort((a, b) => a.x - b.x);
+      return [top[0], top[1], bottom[1], bottom[0]];
+    }
+
+    return null;
+  };
+
   // Use OpenCV to automatically detect the paper in any input image,
   // then perform a perspective warp so the result is just the page.
   // This is now fully generic (no hard‑coded coordinates for paper‑2).
@@ -91,75 +152,74 @@ export const Scanner = () => {
       let bestScore = 0;
       let bestAreaRatio = 0;
 
+      const dist = (p1, p2) =>
+        Math.sqrt((p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y));
+
+      const quadArea = (q) => {
+        if (!q || q.length !== 4) return 0;
+        const [a, b, c, d] = q;
+        return 0.5 * Math.abs((a.x * b.y - b.x * a.y) + (b.x * c.y - c.x * b.y) + (c.x * d.y - d.x * c.y) + (d.x * a.y - a.x * d.y));
+      };
+
       for (let i = 0; i < contours.size(); i++) {
         const c = contours.get(i);
+        const cArea = cv.contourArea(c);
+        const cRatio = cArea / imgArea;
+        if (cRatio < 0.02 || cRatio > 0.99) {
+          c.delete();
+          continue;
+        }
         const peri = cv.arcLength(c, true);
         const approx = new cv.Mat();
         cv.approxPolyDP(c, approx, 0.02 * peri, true);
 
-        if (approx.rows === 4) {
-          const area = cv.contourArea(approx);
-          const areaRatio = area / imgArea;
+        const n = approx.rows;
+        let orderedQuad = null;
+        let areaRatio = 0;
 
-          // Skip only extremely tiny or literally full-frame quads
+        if (n === 4) {
+          const area = cv.contourArea(approx);
+          areaRatio = area / imgArea;
           if (areaRatio < 0.02 || areaRatio > 0.99) {
             approx.delete();
             c.delete();
             continue;
           }
-
-          // Compute a rough aspect ratio to favor paper‑like rectangles
           const ptsTmp = [];
-          for (let j = 0; j < approx.rows; j++) {
-            const x = approx.intAt(j, 0);
-            const y = approx.intAt(j, 1);
-            ptsTmp.push({ x, y });
-          }
+          for (let j = 0; j < 4; j++) ptsTmp.push({ x: approx.intAt(j, 0), y: approx.intAt(j, 1) });
           ptsTmp.sort((a, b) => a.y - b.y);
           const top = ptsTmp.slice(0, 2).sort((a, b) => a.x - b.x);
           const bottom = ptsTmp.slice(2, 4).sort((a, b) => a.x - b.x);
-          const tlCand = top[0];
-          const trCand = top[1];
-          const brCand = bottom[1];
-          const blCand = bottom[0];
+          orderedQuad = [top[0], top[1], bottom[1], bottom[0]];
+        } else if (n === 3) {
+          const ptsTmp = [];
+          for (let j = 0; j < 3; j++) ptsTmp.push({ x: approx.intAt(j, 0), y: approx.intAt(j, 1) });
+          orderedQuad = completeA4Quad(ptsTmp);
+          if (!orderedQuad) { approx.delete(); c.delete(); continue; }
+          const area = quadArea(orderedQuad);
+          areaRatio = area / imgArea;
+          if (areaRatio < 0.02 || areaRatio > 0.99) { approx.delete(); c.delete(); continue; }
+        }
 
-          const dist = (p1, p2) =>
-            Math.sqrt((p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y));
-
-          const widthTop = dist(tlCand, trCand);
-          const widthBottom = dist(blCand, brCand);
-          const heightLeft = dist(tlCand, blCand);
-          const heightRight = dist(trCand, brCand);
-
-          const avgWidth = (widthTop + widthBottom) / 2;
-          const avgHeight = (heightLeft + heightRight) / 2;
-          const aspect = avgHeight > 0 ? avgHeight / avgWidth : 0;
-
-          // Score primarily by area; keep aspect in logs only so we don't over‑reject.
+        if (orderedQuad && areaRatio > 0) {
           const score = areaRatio;
-
           if (score > bestScore) {
             bestScore = score;
             bestAreaRatio = areaRatio;
-            if (paperCnt) {
-              paperCnt.delete();
-            }
-            paperCnt = approx; // keep this approx
-          } else {
-            approx.delete();
+            if (paperCnt) paperCnt.delete();
+            paperCnt = cv.matFromArray(4, 1, cv.CV_32SC2, [
+              Math.round(orderedQuad[0].x), Math.round(orderedQuad[0].y),
+              Math.round(orderedQuad[1].x), Math.round(orderedQuad[1].y),
+              Math.round(orderedQuad[2].x), Math.round(orderedQuad[2].y),
+              Math.round(orderedQuad[3].x), Math.round(orderedQuad[3].y),
+            ]);
           }
-        } else {
-          approx.delete();
         }
+        approx.delete();
         c.delete();
       }
 
       if (!paperCnt) {
-        console.warn('[Scanner] Could not find a suitable paper contour – treating as no paper.', {
-          imgArea,
-          bestScore,
-          bestAreaRatio,
-        });
         src.delete();
         gray.delete();
         blurred.delete();
@@ -173,11 +233,6 @@ export const Scanner = () => {
       // so random noise doesn't immediately trigger detection, but real pages do.
       const minAreaRatio = 0.15;
       if (bestAreaRatio < minAreaRatio) {
-        console.warn('[Scanner] Best contour area too small, ignoring as non‑paper:', {
-          bestAreaRatio,
-          minAreaRatio,
-          imgArea,
-        });
         src.delete();
         gray.delete();
         blurred.delete();
@@ -212,8 +267,8 @@ export const Scanner = () => {
         window.lastDetectedQuad = ordered.map((p) => ({ x: p.x, y: p.y }));
       }
 
-      const imgW = imgElement.naturalWidth;
-      const imgH = imgElement.naturalHeight;
+      const imgW = imgElement.naturalWidth || imgElement.width;
+      const imgH = imgElement.naturalHeight || imgElement.height;
 
       // If no explicit target size, derive from the detected quadrilateral
       // and scale up for higher-resolution output.
@@ -305,6 +360,12 @@ export const Scanner = () => {
     // First, load OpenCV
     loadOpenCv(() => {
       console.log('[Scanner] OpenCV ready, using direct OpenCV pipeline...');
+
+      // If we're not rendering a result container anymore (AR-only mode),
+      // skip this legacy image-processing pipeline.
+      if (!containerRef.current) {
+        return;
+      }
 
       // Clear previous result
       containerRef.current.innerHTML = '';
@@ -400,7 +461,25 @@ export const Scanner = () => {
       const ctx = overlay.getContext('2d');
       ctx.clearRect(0, 0, overlay.width, overlay.height);
 
-      if (!quad || quad.length !== 4) return;
+      if (!quad || quad.length !== 4) {
+        smoothedQuadRef.current = null;
+        return;
+      }
+
+      // Smooth motion of the detected quad to reduce jitter
+      const prev = smoothedQuadRef.current;
+      const alpha = 0.3; // 0 = no new motion, 1 = no smoothing
+      let smoothed;
+      if (!prev || prev.length !== 4) {
+        smoothed = quad.map((p) => ({ x: p.x, y: p.y }));
+      } else {
+        smoothed = quad.map((p, i) => ({
+          x: prev[i].x + alpha * (p.x - prev[i].x),
+          y: prev[i].y + alpha * (p.y - prev[i].y),
+        }));
+      }
+      smoothedQuadRef.current = smoothed;
+      quad = smoothed;
 
       // Draw AR content first (warped to quad), then outline on top
       const arImg = arImageRef.current;
@@ -460,56 +539,54 @@ export const Scanner = () => {
       ctx.stroke();
     };
 
+    const DETECT_MAX_PX = 400;
+
     const captureBurst = async () => {
       const video = videoRef.current;
       if (!video || !video.srcObject || video.readyState < 2) return;
 
       const candidates = [];
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      const scale = Math.min(1, DETECT_MAX_PX / Math.max(vw, vh));
+      const sw = Math.round(vw * scale);
+      const sh = Math.round(vh * scale);
 
-      for (let i = 0; i < 1; i++) {
-        if (!video || !video.srcObject || video.readyState < 2) break;
+      const smallCanvas = document.createElement('canvas');
+      smallCanvas.width = sw;
+      smallCanvas.height = sh;
+      smallCanvas.getContext('2d').drawImage(video, 0, 0, sw, sh);
 
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(video, 0, 0);
-        const dataURL = canvas.toDataURL('image/png');
-
-        if (window.cv && window.cv.Mat) {
-          await new Promise((resolve) => {
-            const imgEl = new Image();
-            imgEl.onload = () => {
-              try {
-                const resultCanvas = extractPaperWithOpenCV(imgEl);
-                const quad = window.lastDetectedQuad;
-                if (resultCanvas && quad && quad.length === 4) {
-                  const qualityScore = resultCanvas.width * resultCanvas.height;
-                  candidates.push({ quad, qualityScore });
-                }
-              } catch (err) {
-                console.error('[Scanner] Error scanning burst frame', err);
-              } finally {
-                resolve();
-              }
-            };
-            imgEl.src = dataURL;
-          });
+      if (window.cv && window.cv.Mat) {
+        try {
+          const resultCanvas = extractPaperWithOpenCV(smallCanvas);
+          const quad = window.lastDetectedQuad;
+          if (resultCanvas && quad && quad.length === 4) {
+            const scaleX = vw / sw;
+            const scaleY = vh / sh;
+            const quadFull = quad.map((p) => ({ x: p.x * scaleX, y: p.y * scaleY }));
+            const qualityScore = resultCanvas.width * resultCanvas.height;
+            candidates.push({ quad: quadFull, qualityScore });
+          }
+        } catch (err) {
+          console.error('[Scanner] Error scanning burst frame', err);
         }
-
-        // Small delay between frames in the burst to reduce motion blur
-        await new Promise((resolve) => setTimeout(resolve, 100));
       }
 
       // Don't update images state – we only draw the overlay; keeps video visible.
       if (candidates.length > 0) {
         candidates.sort((a, b) => b.qualityScore - a.qualityScore);
         const best = candidates[0];
-        console.warn('[Scanner] Paper detected in burst; drawing best quad overlay.', {
-          qualityScore: best.qualityScore,
-        });
+        missFrameCountRef.current = 0;
         drawQuadOverlay(best.quad);
+      } else if (smoothedQuadRef.current && missFrameCountRef.current < 10) {
+        // No detection this frame; keep the previous quad for up to 10 frames
+        // so the drawing stays in place instead of disappearing immediately.
+        missFrameCountRef.current += 1;
+        drawQuadOverlay(smoothedQuadRef.current);
       } else {
+        missFrameCountRef.current = 0;
+        smoothedQuadRef.current = null;
         drawQuadOverlay(null);
       }
     };
